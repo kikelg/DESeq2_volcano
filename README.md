@@ -9,7 +9,6 @@ This repository contains an R script to perform differential gene expression ana
 - Export of full DESeq2 results and filtered (FDR) results
 - Integration of gene annotations (optional)
 - Export of annotated results as `.tsv` and `.xlsx`
-- Color-formatted Excel tables with frozen headers
 
 ## Requirements
 
