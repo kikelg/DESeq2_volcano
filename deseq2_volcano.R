@@ -1,7 +1,6 @@
 ###################
 ### PREPARACIÓN ###
 ###################
-
 # Limpiamos el entorno
 rm(list = ls())
 gc()
@@ -20,36 +19,55 @@ library(tibble)
 library(ggplot2)
 library(openxlsx)
 
+
+
 ###########################
 ### DISEÑO EXPERIMENTAL ###
 ###########################
+# Ficheros de counts
+# Debe tener mínimo dos caracteres por condición, y el siguiente formato en la cabecera: "geneid" ab_1 ab_2 ab_3 cd_1 cd_2 cd_3
+file_counts <- "../Counts_tomato_ribosome.tsv" 
 
-# Ficheros de entrada
-file_counts <- "annona_counts.tsv" # Debe tener mínimo dos caracteres por condición, y el siguiente formato en la cabecera: "geneid" ab_1 ab_2 ab_3 cd_1 cd_2 cd_3
-file_annot <- "annona_annot.txt" # Dejar "" si no se se utilizan anotaciones
+# Fichero de anotaciones
+# Dejar "" si no se se utilizan anotaciones
+file_annot <- "../tomato_annot.tsv" 
 
 # Variables
-comparison <- "AS_vs_TS"
-condition1 <- "AS"
-condition2 <- "TS"
+comparison <- "test"
+condition1 <- "SC_Ribo_Mock"
+condition2 <- "SC_Ribo_TYLCV"
 rep1 <- 3
 rep2 <- 3
 pvt <- 0.05
 
-# Condiciones
+# Añadir etiquetas al volcano_plot y al scatter_plot
+LABELS_VOLCANO <- TRUE # TRUE o FALSE
+LABELS_SCATTER <- TRUE # TRUE o FALSE
+
+
+
+###########################
+####### CONDICIONES #######
+###########################
 group <- factor(c(rep(condition1, rep1), rep(condition2, rep2)))
 df_counts <- read.table(file_counts, sep = "\t", header = TRUE, row.names = 1, fill = TRUE, quote = "")
-df_annot <- read.table(file_annot, sep = "\t", header = TRUE, row.names = 1, fill = TRUE, quote = "") # Comentar si no se se utilizan anotaciones
 
-# Selección de las muestras que queremos analizar. Comentar si analizamos todas
+if (file_annot == "") {
+  message("No se han encontrado las anotaciones, generando los archivos sin ellas:")
+} else {
+  message("Se han encontrado las anotaciones, generando los archivos con ellas:")
+  df_annot <- read.table(file_annot, sep = "\t", header = TRUE, row.names = 1, fill = TRUE, quote = "")
+}
+
 keep <- grep(condition1,colnames(df_counts))
 keep <- append(keep, grep(condition2,colnames(df_counts)))
 df_counts <- df_counts[,keep]
 
+
+
 ##############
 ### DESEQ2 ###
 ##############
-
 # Directorio para los resultados
 dir.create(comparison, showWarnings = FALSE)
 dir.create(paste0(comparison, "/graphs"), showWarnings = FALSE)
@@ -74,10 +92,11 @@ ddsHTSeq.res.fdr <- ddsHTSeq.res[!is.na(ddsHTSeq.res$padj), ]
 ddsHTSeq.res.fdr <- ddsHTSeq.res.fdr[ddsHTSeq.res.fdr$padj < pvt, ]
 write.table(as.matrix(ddsHTSeq.res.fdr), file = paste0(comparison, "/DESeq2_FDR.tsv"), sep = "\t", col.names = NA, row.names = TRUE, quote = FALSE)
 
+
+
 ################
 ### GRÁFICOS ###
 ################
-
 # Transformación rlog
 ddsHTSeq.rld <- rlogTransformation(ddsHTSeq, blind = TRUE)
 
@@ -100,17 +119,30 @@ png(file = paste0(comparison, "/graphs/corr_plot.png"), 1000, 1000, pointsize = 
 corrplot(cor(normalized_counts), method = "square", addCoef.col = "white")
 dev.off()
 
+# Dispersion plot
+png(file = paste0(comparison, "/graphs/dsp_plot.png"), 1000, 1000, pointsize = 20)
+plotDispEsts(ddsHTSeq, main="Dispersion plot")
+dev.off()
+
 # Volcano plot
 data <- read.table(paste0(comparison, "/DESeq2_results.tsv"), sep = "\t", header = TRUE, row.names = 1)
-
 data <- data %>%
   mutate(
     Expression = case_when(
-      log2FoldChange > 1 & pvalue < pvt ~ "Up",
-      log2FoldChange < -1 & pvalue < pvt ~ "Down",
+      log2FoldChange > 1 & padj < pvt ~ "Up",
+      log2FoldChange < -1 & padj < pvt ~ "Down",
       TRUE ~ "No significance"),
-      Significance = -log10(pvalue))
+    Significance = -log10(padj)
+  )
+
 umbral_y <- -log10(pvt)
+
+top_up <- data %>% filter(Expression == "Up") %>% arrange(-log2FoldChange) %>% slice_head(n = 3)
+top_down <- data %>% filter(Expression == "Down") %>% arrange(log2FoldChange) %>% slice_head(n = 3)
+top_sig <- data %>% arrange(-Significance) %>% slice_head(n = 3)
+top_genes <- bind_rows(top_up, top_down, top_sig) %>%
+  rownames_to_column(var = "gene_id") %>%
+  distinct(gene_id, .keep_all = TRUE)
 
 p1 <- ggplot(data, aes(x = log2FoldChange, y = Significance)) +
   geom_point(aes(color = Expression), alpha = 0.4, size = 1.6) +
@@ -119,25 +151,100 @@ p1 <- ggplot(data, aes(x = log2FoldChange, y = Significance)) +
   geom_vline(xintercept = -1, linetype = "dotdash", color = "gray25") +
   geom_vline(xintercept = 1, linetype = "dotdash", color = "gray25") +
   geom_hline(yintercept = umbral_y, linetype = "dotdash", color = "gray25") +
-  coord_cartesian(xlim = c(-15, 15)) + 
-  theme(panel.background = element_rect(fill = "gray96"),
-        axis.line.x = element_line(color = "black"),
-        axis.line.y = element_line(color = "black")) +
+  coord_cartesian(xlim = c(-15, 15), clip = "off") +
+  theme(
+    panel.background = element_rect(fill = "gray96"),
+    axis.line.x = element_line(color = "black"),
+    axis.line.y = element_line(color = "black")) +
   xlab(expression(log[2] * "FC")) +
-  ylab(expression("-log"[10] * "PValue"))
+  ylab(expression("-log"[10] * "Padj"))
+if (LABELS_VOLCANO) {
+  p1 <- p1 +
+    geom_label_repel(
+      data = top_genes,
+      aes(label = gene_id),
+      size = 3,
+      max.overlaps = Inf,
+      segment.color = "black",
+      color = "black",
+      fill = "white",
+      min.segment.length = 0,
+      arrow = arrow(length = unit(0.01, "npc")),
+      box.padding = 1.75
+    ) 
+  }
 
-suppressWarnings(ggsave(paste0(comparison, "/graphs/volcano_plot.png"), plot = p1, width = 7, height = 5))
+suppressWarnings(ggsave(paste0(comparison, "/graphs/volcano_plot.png"), plot = p1, width = 8, height = 5, dpi = 600))
 
-# Dispersions plot
-png(file = paste0(comparison, "/graphs/dsp_plot.png"), 1000, 1000, pointsize = 20)
-plotDispEsts(ddsHTSeq, main="Dispersion plot")
-dev.off()
+# Scatter plot
+counts_log10 <- log10(assay(ddsHTSeq, "counts") + 1)
+cols1 <- grep(condition1, colnames(counts_log10), value = TRUE)
+cols2 <- grep(condition2, colnames(counts_log10), value = TRUE)
+df_means <- data.frame(
+  gene_id = rownames(counts_log10),
+  cond1 = rowMeans(counts_log10[, cols1, drop = FALSE]),
+  cond2 = rowMeans(counts_log10[, cols2, drop = FALSE])
+)
+
+res_df <- as.data.frame(results(ddsHTSeq, contrast = c("condition", condition1, condition2))) %>%
+  rownames_to_column("gene_id")
+
+df2 <- df_means %>%
+  left_join(res_df, by = "gene_id") %>%
+  mutate(
+    status = case_when(
+      cond1 - cond2 > 0.5  ~ "Up",
+      cond1 - cond2 < -0.5 ~ "Down",
+      TRUE                 ~ "No significance"
+    )
+  )
+
+top_up   <- res_df %>%
+  filter(!is.na(padj), log2FoldChange > 1, padj < pvt) %>%
+  arrange(-log2FoldChange) %>% slice_head(n = 3) %>% pull(gene_id)
+top_down <- res_df %>%
+  filter(!is.na(padj), log2FoldChange < -1, padj < pvt) %>%
+  arrange( log2FoldChange) %>% slice_head(n = 3) %>% pull(gene_id)
+top_genes_scatter <- unique(c(top_up, top_down))
+
+p2 <- ggplot(df2, aes(x = cond1, y = cond2, color = status)) +
+  geom_point(alpha = 0.4, size = 1.6) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray25") +
+  scale_color_manual(values = c("red3", "gray60", "green3")) +
+  theme(panel.background = element_rect(fill = "gray96"),
+        axis.line = element_line(color = "black")) +
+  labs(
+    x = bquote(.(condition1) ~ "(log"[10]*" counts)"),
+    y = bquote(.(condition2) ~ "(log"[10]*" counts)"),
+    color = "Status"
+  )
+
+if (LABELS_SCATTER) {
+  p2 <- p2 +
+    geom_label_repel(
+      data = df2 %>% filter(gene_id %in% top_genes_scatter),
+      aes(label = gene_id),
+      size = 3,
+      max.overlaps = Inf,
+      segment.color = "black",
+      color = "black",
+      fill = "white",
+      arrow = arrow(length = unit(0.01, "npc")),
+      box.padding = 1.75
+    )
+}
+
+ggsave(paste0(comparison, "/graphs/scatter_plot.png"), plot = p2, width = 8, height = 5, dpi = 600)
+
 
 
 #############################
 ### UNIÓN DE LOS ARCHIVOS ###
 #############################
 
+############################
+##### CON ANOTACIONES ######
+############################
 if (file.exists(file_annot)) {
   # Carga los df
   df_fdr <- read.table(paste0(comparison, "/DESeq2_FDR.tsv"), sep = "\t", header = TRUE, row.names = 1)
@@ -166,8 +273,6 @@ if (file.exists(file_annot)) {
   rownames(df_all_merged) <- df_all_merged$gene_id
   df_all_merged$gene_id <- NULL
   
-  
-  
   # FDR_counts_annot
   df_sorted_merged <- df_merged[order(-df_merged$log2FoldChange), ]
   write.table(df_sorted_merged, file = paste0(comparison, "/FDR_counts_annot.tsv"), sep = "\t", col.names = NA, row.names = TRUE, quote = FALSE)
@@ -180,6 +285,8 @@ if (file.exists(file_annot)) {
   df_sorted_merged_asc <- df_merged[order(df_merged$log2FoldChange), ]
   df_negative_log2fc <- df_sorted_merged_asc[df_sorted_merged_asc$log2FoldChange < 0, ]
   write.table(df_negative_log2fc, file = paste0(comparison, "/FDR_counts_annot_negative.tsv"), sep = "\t", col.names = NA, row.names = TRUE, quote = FALSE)
+  
+  
   
   ########################
   ### GENERAR UN EXCEL ###
@@ -209,6 +316,8 @@ if (file.exists(file_annot)) {
   # Guardar el excel
   saveWorkbook(wb, file = paste0(comparison, "/", comparison, ".xlsx"), overwrite = TRUE)
   
+  
+  
   ############################
   ### GENERAR UN EXCEL ALL ###
   ############################
@@ -218,7 +327,6 @@ if (file.exists(file_annot)) {
   addWorksheet(wb, comparison)
   writeData(wb, comparison, df_norm_counts_excel)
 
-  
   # Estilos de la cabecera y las columnas
   numCols1 <- ncol(df_norm_counts_excel)
   headerStyle <- createStyle(fontColour = "#FFFFFF", fgFill = "#4F81BD", halign = "left", fontSize = 12, textDecoration = "bold")
@@ -231,6 +339,11 @@ if (file.exists(file_annot)) {
   # Guardar el excel
   saveWorkbook(wb, file = paste0(comparison, "/", comparison, "_all.xlsx"), overwrite = TRUE)
   
+  
+  
+  ############################
+  ##### SIN ANOTACIONES ######
+  ############################
 } else {
   message("No se han encontrado las anotaciones, generando los archivos sin ellas")
   
@@ -256,7 +369,6 @@ if (file.exists(file_annot)) {
   rownames(df_all_merged) <- df_all_merged$gene_id
   df_all_merged$gene_id <- NULL
   
-  
   # FDR_counts
   df_sorted_merged <- df_merged[order(-df_merged$log2FoldChange), ]
   write.table(df_sorted_merged, file = paste0(comparison, "/FDR_counts.tsv"), sep = "\t", col.names = NA, row.names = TRUE, quote = FALSE)
@@ -270,6 +382,8 @@ if (file.exists(file_annot)) {
   df_negative_log2fc <- df_sorted_merged_asc[df_sorted_merged_asc$log2FoldChange < 0, ]
   write.table(df_negative_log2fc, file = paste0(comparison, "/FDR_counts_negative.tsv"), sep = "\t", col.names = NA, row.names = TRUE, quote = FALSE)
 
+  
+  
   ########################
   ### GENERAR UN EXCEL ###
   ########################
@@ -299,6 +413,7 @@ if (file.exists(file_annot)) {
   saveWorkbook(wb, file = paste0(comparison, "/", comparison, ".xlsx"), overwrite = TRUE)
 
 
+  
   ############################
   ### GENERAR UN EXCEL ALL ###
   ############################
@@ -307,7 +422,6 @@ if (file.exists(file_annot)) {
   wb <- createWorkbook()
   addWorksheet(wb, comparison)
   writeData(wb, comparison, df_norm_counts_excel)
-
 
   # Estilos de la cabecera y las columnas
   numCols1 <- ncol(df_norm_counts_excel)
