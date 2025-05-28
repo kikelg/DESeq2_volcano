@@ -344,9 +344,7 @@ if (file.exists(file_annot)) {
   ############################
   ##### SIN ANOTACIONES ######
   ############################
-} else {
-  message("No se han encontrado las anotaciones, generando los archivos sin ellas")
-  
+} else {  
   # Carga los df
   df_fdr <- read.table(paste0(comparison, "/DESeq2_FDR.tsv"), sep = "\t", header = TRUE, row.names = 1)
   df_norm_counts <- read.table(paste0(comparison, "/DESeq2_counts.tsv"), sep = "\t", header = TRUE, row.names = 1)
